@@ -39,7 +39,10 @@ function! ExpandEnvVarUnderCursor()
   endif
 
   let l:expanded = expand('$' . l:varname)
-  call setline('.', l:line[0:l:start - 1] . l:expanded . l:line[l:end:])
+  let l:before = l:start > 0 ? l:line[0 : l:start - 1] : ''
+  let l:after = l:line[l:end :]
+  call setline('.', l:before . l:expanded . l:after)
+
 endfunction
 
 function! ExpandAllEnvVarsInLine()
