@@ -4,7 +4,7 @@ function! ExpandEnvVarUnderCursor()
   let l:line = getline('.')
   let l:pos = col('.') - 1  " cursor index, 0-based
 
-  " === 1. Try to match ${VAR} style ===
+  " === 1. Match ${VAR} ===
   let l:match = matchstrpos(l:line, '\${\w\+}', 0)
   while l:match != ['', -1, -1]
         \ && !(l:pos >= l:match[1] && l:pos < l:match[1] + len(l:match[0]))
@@ -16,9 +16,9 @@ function! ExpandEnvVarUnderCursor()
     let l:full = l:match[0]
     let l:start = l:match[1]
     let l:end = l:start + len(l:full)
-    let l:varname = l:full[2:-2]  " extract from ${VAR}
+    let l:varname = l:full[2:-2]  " from ${VAR}
   else
-    " === 2. Try to match $VAR style ===
+    " === 2. Match $VAR ===
     let l:match = matchstrpos(l:line, '\$\w\+', 0)
     while l:match != ['', -1, -1]
           \ && !(l:pos >= l:match[1] && l:pos < l:match[1] + len(l:match[0]))
@@ -30,28 +30,29 @@ function! ExpandEnvVarUnderCursor()
       let l:full = l:match[0]
       let l:start = l:match[1]
       let l:end = l:start + len(l:full)
-      let l:varname = l:full[1:]  " extract from $VAR
+      let l:varname = l:full[1:]  " from $VAR
     else
       echohl WarningMsg
-      echom "No environment variable found under cursor"
+      echom "No environment variable under cursor"
       echohl None
       return
     endif
   endif
 
-  " === 3. Expand and handle undefined vars ===
+  " === 3. Expand and validate ===
   let l:expanded = expand('$' . l:varname)
-
-  if l:expanded ==# ''
+  if l:expanded ==# ('$' . l:varname)
     echohl WarningMsg
     echom '⚠️ Environment variable $' . l:varname . ' is not defined'
     echohl None
     return
   endif
 
-  " === 4. Replace in line ===
-  let l:newline = l:line[:l:start - 1] . l:expanded . l:line[l:end:]
-  call setline('.', l:newline)
+  " === 4. Replace text ===
+  " Use strpart to avoid negative indexing issues (e.g., at start of line)
+  let l:before = strpart(l:line, 0, l:start)
+  let l:after = strpart(l:line, l:end)
+  call setline('.', l:before . l:expanded . l:after)
 endfunction
 
 function! ExpandAllEnvVarsInLine()
@@ -62,7 +63,6 @@ function! ExpandAllEnvVarsInLine()
 
   " Then handle $VAR style, being careful not to double-expand already replaced ones
   let l:line = substitute(l:line, '\$\(\w\+\)', '\=expand("$" . submatch(1))', 'g')
-
   call setline('.', l:line)
 endfunction
 
