@@ -39,6 +39,13 @@ function! ExpandEnvVarUnderCursor()
   endif
 
   let l:expanded = expand('$' . l:varname)
+  let l:expanded = expand('$' . l:varname)
+  if l:expanded ==# ''
+    echohl WarningMsg
+    echom '⚠️ Environment variable $' . l:varname . ' is not defined'
+    echohl None
+    return
+  endif
   let l:before = l:start > 0 ? l:line[0 : l:start - 1] : ''
   let l:after = l:line[l:end :]
   call setline('.', l:before . l:expanded . l:after)
