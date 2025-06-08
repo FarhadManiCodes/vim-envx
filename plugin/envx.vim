@@ -4,11 +4,10 @@ function! ExpandEnvVarUnderCursor()
   let l:line = getline('.')
   let l:pos = col('.') - 1  " cursor index, 0-based
 
-  " Try to match ${VAR} format first
+  " === 1. Try to match ${VAR} style ===
   let l:match = matchstrpos(l:line, '\${\w\+}', 0)
   while l:match != ['', -1, -1]
         \ && !(l:pos >= l:match[1] && l:pos < l:match[1] + len(l:match[0]))
-    " Try next match
     let l:next_start = l:match[1] + 1
     let l:match = matchstrpos(l:line, '\${\w\+}', l:next_start)
   endwhile
@@ -17,9 +16,9 @@ function! ExpandEnvVarUnderCursor()
     let l:full = l:match[0]
     let l:start = l:match[1]
     let l:end = l:start + len(l:full)
-    let l:varname = l:full[2:-2]  " extract from ${...}
+    let l:varname = l:full[2:-2]  " extract from ${VAR}
   else
-    " Try to match $VAR format
+    " === 2. Try to match $VAR style ===
     let l:match = matchstrpos(l:line, '\$\w\+', 0)
     while l:match != ['', -1, -1]
           \ && !(l:pos >= l:match[1] && l:pos < l:match[1] + len(l:match[0]))
@@ -31,25 +30,28 @@ function! ExpandEnvVarUnderCursor()
       let l:full = l:match[0]
       let l:start = l:match[1]
       let l:end = l:start + len(l:full)
-      let l:varname = l:full[1:]  " extract from $...
+      let l:varname = l:full[1:]  " extract from $VAR
     else
-      echo "No environment variable found under cursor"
+      echohl WarningMsg
+      echom "No environment variable found under cursor"
+      echohl None
       return
     endif
   endif
 
+  " === 3. Expand and handle undefined vars ===
   let l:expanded = expand('$' . l:varname)
-  let l:expanded = expand('$' . l:varname)
+
   if l:expanded ==# ''
     echohl WarningMsg
     echom '⚠️ Environment variable $' . l:varname . ' is not defined'
     echohl None
     return
   endif
-  let l:before = l:start > 0 ? l:line[0 : l:start - 1] : ''
-  let l:after = l:line[l:end :]
-  call setline('.', l:before . l:expanded . l:after)
 
+  " === 4. Replace in line ===
+  let l:newline = l:line[:l:start - 1] . l:expanded . l:line[l:end:]
+  call setline('.', l:newline)
 endfunction
 
 function! ExpandAllEnvVarsInLine()
