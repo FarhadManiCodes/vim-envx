@@ -1,5 +1,21 @@
 " expand environment variable
 
+
+function! s:ExpandOrKeep(varname, prefix)
+  let l:value = expand('$' . a:varname)
+  if l:value ==# ('$' . a:varname)
+    echohl WarningMsg
+    echom '⚠️ Environment variable $' . a:varname . ' is not defined'
+    echohl None
+    if a:prefix == "${"
+      return '${' . a:varname . '}'
+    else
+      return '$' . a:varname
+    endif
+  endif
+  return l:value
+endfunction
+
 function! ExpandEnvVarUnderCursor()
   let l:line = getline('.')
   let l:pos = col('.') - 1  " cursor index, 0-based
@@ -40,45 +56,47 @@ function! ExpandEnvVarUnderCursor()
   endif
 
   " === 3. Expand and validate ===
-  let l:expanded = expand('$' . l:varname)
-  if l:expanded ==# ('$' . l:varname)
-    echohl WarningMsg
-    echom '⚠️ Environment variable $' . l:varname . ' is not defined'
-    echohl None
-    return
-  endif
+let l:prefix = (l:full[1] == '{') ? "${" : "$"
+let l:expanded = <SID>ExpandOrKeep(l:varname, l:prefix)
 
   " === 4. Replace text ===
   " Use strpart to avoid negative indexing issues (e.g., at start of line)
   let l:before = strpart(l:line, 0, l:start)
   let l:after = strpart(l:line, l:end)
-  call setline('.', l:before . l:expanded . l:after)
+  let l:replacement = l:before . l:expanded . l:after
+  if l:replacement !=# l:line
+    call setline('.', l:replacement)
+  endif
 endfunction
+
 
 function! ExpandAllEnvVarsInLine()
   let l:line = getline('.')
 
-  " First handle ${VAR} style
-  let l:line = substitute(l:line, '\${\(\w\+\)}', '\=expand("$" . submatch(1))', 'g')
+  " === Expand ${VAR} format ===
+  let l:line = substitute(l:line, '\${\(\w\+\)}', '\=s:ExpandOrKeep(submatch(1), "${")', 'g')
 
-  " Then handle $VAR style, being careful not to double-expand already replaced ones
-  let l:line = substitute(l:line, '\$\(\w\+\)', '\=expand("$" . submatch(1))', 'g')
+  " === Expand $VAR format ===
+  let l:line = substitute(l:line, '\$\(\w\+\)', '\=s:ExpandOrKeep(submatch(1), "$")', 'g')
+
   call setline('.', l:line)
 endfunction
 
+
 function! ExpandEnvVarsInVisual()
-  " Save current selection range
   let l:start_line = line("'<")
   let l:end_line = line("'>")
 
   for lnum in range(l:start_line, l:end_line)
     let l:line = getline(lnum)
 
-    " First expand ${VAR}
-    let l:line = substitute(l:line, '\${\(\w\+\)}', '\=expand("$" . submatch(1))', 'g')
+    " Expand ${VAR}
+    let l:line = substitute(l:line, '\${\(\w\+\)}',
+          \ '\=<SID>ExpandOrKeep(submatch(1), "${")', 'g')
 
-    " Then expand $VAR
-    let l:line = substitute(l:line, '\$\(\w\+\)', '\=expand("$" . submatch(1))', 'g')
+    " Expand $VAR
+    let l:line = substitute(l:line, '\$\(\w\+\)',
+          \ '\=<SID>ExpandOrKeep(submatch(1), "$")', 'g')
 
     call setline(lnum, l:line)
   endfor
