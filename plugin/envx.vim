@@ -1,19 +1,28 @@
 " expand environment variable
 
 
+let s:suppress_warnings = 0
+let s:unset_var_count = 0
+
+function! s:IsVarUnset(varname)
+  return expand('$' . a:varname) ==# ('$' . a:varname)
+endfunction
+
 function! s:ExpandOrKeep(varname, prefix)
-  let l:value = expand('$' . a:varname)
-  if l:value ==# ('$' . a:varname)
-    echohl WarningMsg
-    echom '⚠️ Environment variable $' . a:varname . ' is not defined'
-    echohl None
+  if s:IsVarUnset(a:varname)
+    let s:unset_var_count += 1
+    if !s:suppress_warnings
+      echohl WarningMsg
+      echom '⚠️ Environment variable $' . a:varname . ' is not defined'
+      echohl None
+    endif
     if a:prefix == "${"
       return '${' . a:varname . '}'
     else
       return '$' . a:varname
     endif
   endif
-  return l:value
+  return expand('$' . a:varname)
 endfunction
 
 function! ExpandEnvVarUnderCursor()
@@ -94,10 +103,18 @@ endfunction
 
 function! ExpandAllEnvVarsInBuffer()
   let l:save_cursor = getcurpos()
+  let s:suppress_warnings = 1
+  let s:unset_var_count = 0
   for lnum in range(1, line('$'))
     call setline(lnum, s:ExpandEnvVarsInText(getline(lnum)))
   endfor
+  let s:suppress_warnings = 0
   call setpos('.', l:save_cursor)
+  if s:unset_var_count > 0
+    echohl WarningMsg
+    echom '⚠️ ' . s:unset_var_count . ' environment variable(s) were not defined and left unchanged'
+    echohl None
+  endif
 endfunction
 
 let g:env_stub_value = ""
@@ -158,10 +175,6 @@ command! EnvxExpandAll call ExpandAllEnvVarsInBuffer()
 " === Highlight $VAR / ${VAR} references that aren't set in the environment ===
 
 highlight default link EnvxUnsetVar WarningMsg
-
-function! s:IsVarUnset(varname)
-  return expand('$' . a:varname) ==# ('$' . a:varname)
-endfunction
 
 function! s:HighlightUnsetEnvVars()
   if exists('w:envx_match_ids')
