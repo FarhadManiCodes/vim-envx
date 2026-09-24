@@ -25,12 +25,6 @@ function! s:VarNameFromMatch(full)
   return (a:full[1] ==# '{') ? a:full[2:-2] : a:full[1:]
 endfunction
 
-function! s:SetLineIfChanged(lnum, text)
-  if getline(a:lnum) !=# a:text
-    call setline(a:lnum, a:text)
-  endif
-endfunction
-
 function! s:ExpandOrKeep(varname, prefix)
   if s:IsVarUnset(a:varname)
     let s:unset_var_count += 1
@@ -98,56 +92,58 @@ function! s:ExpandEnvVarsInText(text)
 endfunction
 
 
-function! EnvxExpandLine()
-  call s:SetLineIfChanged('.', s:ExpandEnvVarsInText(getline('.')))
-endfunction
-
-
-function! EnvxExpandVisual()
-  let l:start_line = line("'<")
-  let l:end_line = line("'>")
-
-  for lnum in range(l:start_line, l:end_line)
-    call s:SetLineIfChanged(lnum, s:ExpandEnvVarsInText(getline(lnum)))
-  endfor
-endfunction
-
-
-function! EnvxExpandBuffer()
-  let l:save_cursor = getcurpos()
+" Bulk paths report one summary instead of a warning per variable, which
+" would otherwise stack up into hit-enter prompts.
+function! s:ExpandRange(first, last)
   let s:suppress_warnings = 1
   let s:unset_var_count = 0
-
-  let l:lines = getline(1, '$')
-  let l:changed = 0
-  for l:i in range(len(l:lines))
-    let l:new = s:ExpandEnvVarsInText(l:lines[l:i])
-    if l:new !=# l:lines[l:i]
-      let l:lines[l:i] = l:new
-      let l:changed = 1
+  try
+    let l:lines = getline(a:first, a:last)
+    let l:new = map(copy(l:lines), 's:ExpandEnvVarsInText(v:val)')
+    if l:new !=# l:lines
+      call setline(a:first, l:new)
     endif
-  endfor
-  if l:changed
-    call setline(1, l:lines)
-  endif
-
-  let s:suppress_warnings = 0
-  call setpos('.', l:save_cursor)
+  finally
+    let s:suppress_warnings = 0
+  endtry
   if s:unset_var_count > 0
     echohl WarningMsg
-    echom '⚠️ ' . s:unset_var_count . ' environment variable(s) were not defined and left unchanged'
+    echom '⚠️ ' . s:unset_var_count . ' environment variable(s) not defined, left unchanged'
     echohl None
   endif
+endfunction
+
+function! EnvxExpandLine()
+  call s:ExpandRange(line('.'), line('.'))
+endfunction
+
+function! EnvxExpandVisual()
+  call s:ExpandRange(line("'<"), line("'>"))
+endfunction
+
+function! EnvxExpandBuffer()
+  call s:ExpandRange(1, line('$'))
 endfunction
 
 let s:env_stub_value = ""
 let s:env_stub_active = 0
 
+function! s:CancelExtraction()
+  let s:env_stub_value = ""
+  let s:env_stub_active = 0
+  echohl WarningMsg
+  echom '⚠️ envx: extraction cancelled (use u to undo)'
+  echohl None
+endfunction
+
 function! s:EnterInsertAfterMessage()
-  " Guard against the 800ms timer firing after the user already left
-  " Normal mode on their own (would otherwise feed "i$" as literal text).
+  " If the user left Normal mode during the delay, feeding "i$" would insert
+  " literal text, and leaving the stub active would fire on some later,
+  " unrelated InsertLeave.
   if mode() ==# 'n'
     call feedkeys("i$", 'n')
+  else
+    call s:CancelExtraction()
   endif
 endfunction
 
@@ -159,13 +155,17 @@ function! s:ExtractToEnvStubAutoAssign()
     return
   endif
 
-  " Save selection to register z
+  " Yank via register z, then restore z and the unnamed register (setreg()
+  " on z also repoints unnamed) so the user's registers survive.
+  let l:save_z = [getreg('z'), getregtype('z')]
+  let l:save_unnamed = [getreg('"'), getregtype('"')]
   normal! gv"zy
   let s:env_stub_value = @z
   let s:env_stub_active = 1
+  call setreg('z', l:save_z[0], l:save_z[1])
+  call setreg('"', l:save_unnamed[0], l:save_unnamed[1])
 
-  " Delete selected text
-  normal! gvd
+  normal! gv"_d
 
   " Force screen update
   redraw
@@ -180,21 +180,17 @@ function! s:ExtractToEnvStubAutoAssign()
 endfunction
 
 function! s:InsertEnvAssignmentAbove()
-  if s:env_stub_active && s:env_stub_value != ""
-    let l:lnum = line('.')
-    let l:varname = expand('<cword>')
-    if l:varname !~# '^\w\+$'
-      echohl WarningMsg
-      echom '⚠️ envx: no variable name entered; extraction cancelled (use u to undo)'
-      echohl None
-    else
-      let l:escaped_value = escape(s:env_stub_value, '\"')
-      call append(l:lnum - 1, l:varname . '="' . l:escaped_value . '"')
-    endif
-
-    let s:env_stub_value = ""
-    let s:env_stub_active = 0
+  if !s:env_stub_active || s:env_stub_value ==# ""
+    return
   endif
+  let l:varname = expand('<cword>')
+  if l:varname !~# '^\w\+$'
+    call s:CancelExtraction()
+    return
+  endif
+  call append(line('.') - 1, l:varname . '="' . escape(s:env_stub_value, '\"') . '"')
+  let s:env_stub_value = ""
+  let s:env_stub_active = 0
 endfunction
 
 augroup EnvxExtract

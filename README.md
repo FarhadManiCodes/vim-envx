@@ -33,6 +33,15 @@ Then run `:PlugInstall`.
 | Visual (`x`)  | `<leader>ev`     | Expand all environment variables in visual   |
 | Visual (`x`)  | `<leader>ex`     | Extract selected text as env variable        |
 
+To use different keys, map the `<Plug>` targets yourself; the default mapping for that action is then skipped:
+
+```vim
+nmap <leader>xv <Plug>(EnvxExpandUnderCursor)
+nmap <leader>xl <Plug>(EnvxExpandLine)
+xmap <leader>xv <Plug>(EnvxExpandVisual)
+xmap <leader>xe <Plug>(EnvxExtract)
+```
+
 ## Commands
 
 | Command          | Action                                       |
