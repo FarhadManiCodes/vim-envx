@@ -13,7 +13,7 @@
 - ✂️ Extract part of text into `$VAR` and assign value above  
 - 📜 Expand all variables in a line or selection  
 - 🧠 Smart handling of `$VAR` vs `${VAR}` formats  
-- 🔁 Bash-style defaults: `${PORT:-8080}` expands to `$PORT` if it's set and non-empty, otherwise to `8080`. The default is expanded too (`${CFG:-$HOME/.cfg}`). References with a default are never flagged as unset. Nested defaults (`${A:-${B}}`) and other operators (`:=`, `:?`, `:+`) are left as written.
+- 🔁 Bash-style defaults: `${PORT:-8080}` expands to `$PORT` if it's set and non-empty, otherwise to `8080`. The default is expanded too (`${CFG:-$HOME/.cfg}`). A reference with a default is never flagged as unset, but an unset variable *inside* the default is kept as written, like any other. The default is used literally, so quotes stay (`${A:-"x y"}` gives `"x y"`). Nested defaults (`${A:-${B}}`) and other operators (`:=`, `:?`, `:+`) are left as written.
 
 ## Installation
 

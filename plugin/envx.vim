@@ -16,7 +16,13 @@ let s:unset_var_count = 0
 let s:VAR_PATTERN = '\${\w\+\%(:-[^{}]*\)\=}\|\$\w\+'
 
 function! s:IsVarUnset(varname)
-  return expand('$' . a:varname) ==# ('$' . a:varname)
+  return !exists('$' . a:varname)
+endfunction
+
+" Raw value via eval(), not expand(): Neovim's expand('$X') also globs the
+" value, turning X='*.txt' into a file list. NAME is \w\+, so eval is safe.
+function! s:EnvValue(varname)
+  return eval('$' . a:varname)
 endfunction
 
 " Parse a s:VAR_PATTERN match into {name, has_default, default}.
@@ -35,7 +41,7 @@ function! s:ExpandRef(full)
   let l:ref = s:ParseRef(a:full)
   let l:unset = s:IsVarUnset(l:ref.name)
   if l:ref.has_default
-    let l:value = l:unset ? '' : expand('$' . l:ref.name)
+    let l:value = l:unset ? '' : s:EnvValue(l:ref.name)
     return l:value ==# '' ? s:ExpandEnvVarsInText(l:ref.default) : l:value
   endif
   if l:unset
@@ -47,7 +53,7 @@ function! s:ExpandRef(full)
     endif
     return a:full
   endif
-  return expand('$' . l:ref.name)
+  return s:EnvValue(l:ref.name)
 endfunction
 
 function! EnvxExpandUnderCursor()
