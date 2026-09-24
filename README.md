@@ -31,7 +31,7 @@ Then run `:PlugInstall`.
 | Normal (`n`)  | `<leader>ev`     | Expand environment variable under cursor     |
 | Normal (`n`)  | `<leader>eev`    | Expand all environment variables on line     |
 | Visual (`x`)  | `<leader>ev`     | Expand all environment variables in visual   |
-| Visual (`x`)  | `<leader>evv`    | Extract selected text as env variable        |
+| Visual (`x`)  | `<leader>ex`     | Extract selected text as env variable        |
 
 ## Commands
 
@@ -60,7 +60,7 @@ Pressing `<leader>ev` on `$HOME` will replace it with `/home/yourname`.
 To extract `"Downloads"` into a variable:
 
 1. Select the word in visual mode.  
-2. Press `<leader>evv`.  
+2. Press `<leader>ex`.  
 3. Type your variable name (e.g., `MYDIR`).  
 4. The line above becomes:
 

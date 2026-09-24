@@ -1,5 +1,12 @@
 " expand environment variable
 
+if exists('g:loaded_envx')
+  finish
+endif
+let g:loaded_envx = 1
+
+let s:save_cpo = &cpo
+set cpo&vim
 
 let s:suppress_warnings = 0
 let s:unset_var_count = 0
@@ -190,16 +197,31 @@ function! s:InsertEnvAssignmentAbove()
   endif
 endfunction
 
-xnoremap <leader>evv :<C-u>call <SID>ExtractToEnvStubAutoAssign()<CR>
-
 augroup EnvxExtract
   autocmd!
   autocmd InsertLeave * call <SID>InsertEnvAssignmentAbove()
 augroup END
 
-xnoremap <leader>ev :<C-u>call EnvxExpandVisual()<CR>
-nnoremap <leader>eev :call EnvxExpandLine()<CR>
-nnoremap <leader>ev :call EnvxExpandUnderCursor()<CR>
+" <Plug> mappings: stable targets that survive default-keybinding changes.
+" Rebind by mapping to the <Plug> name instead of editing this file, e.g.:
+"   xmap <leader>myex <Plug>(EnvxExtract)
+xnoremap <silent> <Plug>(EnvxExpandVisual) :<C-u>call EnvxExpandVisual()<CR>
+nnoremap <silent> <Plug>(EnvxExpandLine) :call EnvxExpandLine()<CR>
+nnoremap <silent> <Plug>(EnvxExpandUnderCursor) :call EnvxExpandUnderCursor()<CR>
+xnoremap <silent> <Plug>(EnvxExtract) :<C-u>call <SID>ExtractToEnvStubAutoAssign()<CR>
+
+if !hasmapto('<Plug>(EnvxExpandVisual)', 'x')
+  xmap <leader>ev <Plug>(EnvxExpandVisual)
+endif
+if !hasmapto('<Plug>(EnvxExpandLine)', 'n')
+  nmap <leader>eev <Plug>(EnvxExpandLine)
+endif
+if !hasmapto('<Plug>(EnvxExpandUnderCursor)', 'n')
+  nmap <leader>ev <Plug>(EnvxExpandUnderCursor)
+endif
+if !hasmapto('<Plug>(EnvxExtract)', 'x')
+  xmap <leader>ex <Plug>(EnvxExtract)
+endif
 
 command! EnvxExpandAll call EnvxExpandBuffer()
 
@@ -246,3 +268,6 @@ augroup EnvxHighlightUnset
   autocmd!
   autocmd BufEnter,TextChanged,InsertLeave * call s:HighlightUnsetEnvVars()
 augroup END
+
+let &cpo = s:save_cpo
+unlet s:save_cpo
