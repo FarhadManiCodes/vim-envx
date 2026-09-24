@@ -33,9 +33,10 @@ Public entry points (global, `Envx`-prefixed), each exposed as a `<Plug>` mappin
 - `s:ExtractToEnvStubAutoAssign()` — `<Plug>(EnvxExtract)`, `x <leader>ex`
 
 Key invariants:
-- **Single definition of "unset":** `s:IsVarUnset()` (`expand('$X') ==# '$X'`). Both expansion (`s:ExpandOrKeep`) and highlighting use it; don't re-implement the check.
-- **Unset vars are preserved**, never collapsed to empty. `s:ExpandOrKeep` returns the original `$VAR`/`${VAR}` text.
-- **Single-pass substitution:** `s:ExpandEnvVarsInText` uses one `substitute()` over `s:VAR_PATTERN_CAPTURE`, so an expanded value containing `$word` is never rescanned. Don't split it into chained passes.
+- **One pattern, one resolver:** `s:VAR_PATTERN` matches `$NAME`, `${NAME}` and `${NAME:-default}` (default may not contain braces). Every path (cursor, line/visual/buffer, highlight) parses a match with `s:ParseRef()`, and all expansion goes through `s:ExpandRef(full)`. Add new syntax there, not per call site.
+- **Single definition of "unset":** `s:IsVarUnset()` (`expand('$X') ==# '$X'`). Don't re-implement the check.
+- **Unset vars are preserved**, never collapsed to empty: `s:ExpandRef` returns the original matched text. For `${NAME:-default}`, bash semantics apply: use the default when NAME is unset *or empty*, and expand the default itself (recursive `substitute()` is fine). Default-backed refs never warn and are never highlighted.
+- **Single-pass substitution:** `s:ExpandEnvVarsInText` uses one `substitute()`, so an expanded value containing `$word` is never rescanned. Don't split it into chained passes.
 - **Bulk paths go through `s:ExpandRange()`**, which suppresses per-var warnings and prints one summary (avoids hit-enter prompt cascades), writes with a single `setline()` (one undo step), and skips the write if nothing changed. Only the under-cursor path warns per variable.
 - **Extract flow** is two-phase: yank the selection into script-local `s:env_stub_value` (registers `z` and unnamed are restored afterwards), delete it, then after an 800 ms timer feed `i$` so the user types the name; an `InsertLeave` autocmd reads `<cword>` and appends `NAME="value"` (quotes/backslashes escaped) above. Any abort path must go through `s:CancelExtraction()` so the stub never lingers into a later, unrelated `InsertLeave`.
 - **Unset-var highlighting** (`EnvxUnsetVar` group, linked to `WarningMsg`) does a full-buffer rescan on `BufEnter`/`TextChanged`/`InsertLeave`, with window-local match IDs in `w:envx_match_ids`. The full rescan is an accepted trade-off for the small shell/env files this targets.

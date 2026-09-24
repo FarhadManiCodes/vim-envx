@@ -11,35 +11,43 @@ set cpo&vim
 let s:suppress_warnings = 0
 let s:unset_var_count = 0
 
-" Non-capturing: for matchstrpos() scans that just need match boundaries.
-let s:VAR_PATTERN = '\${\w\+}\|\$\w\+'
-" Capturing: for substitute() replacements that need submatch(1)/submatch(2).
-let s:VAR_PATTERN_CAPTURE = '\${\(\w\+\)}\|\$\(\w\+\)'
+" Matches $NAME, ${NAME} and ${NAME:-default}. Defaults can't contain braces,
+" so nested ${A:-${B}} isn't matched as a whole.
+let s:VAR_PATTERN = '\${\w\+\%(:-[^{}]*\)\=}\|\$\w\+'
 
 function! s:IsVarUnset(varname)
   return expand('$' . a:varname) ==# ('$' . a:varname)
 endfunction
 
-" Extract the bare NAME out of a "$NAME" or "${NAME}" match string.
-function! s:VarNameFromMatch(full)
-  return (a:full[1] ==# '{') ? a:full[2:-2] : a:full[1:]
+" Parse a s:VAR_PATTERN match into {name, has_default, default}.
+function! s:ParseRef(full)
+  let l:m = matchlist(a:full, '^\${\(\w\+\)\(:-\([^{}]*\)\)\=}$')
+  if empty(l:m)
+    return {'name': a:full[1:], 'has_default': 0, 'default': ''}
+  endif
+  return {'name': l:m[1], 'has_default': l:m[2] !=# '', 'default': l:m[3]}
 endfunction
 
-function! s:ExpandOrKeep(varname, prefix)
-  if s:IsVarUnset(a:varname)
+" Replacement text for one reference. Like bash, ${NAME:-default} uses the
+" (itself expanded) default when NAME is unset or empty. A plain reference
+" to an unset variable is kept as written, never collapsed to empty.
+function! s:ExpandRef(full)
+  let l:ref = s:ParseRef(a:full)
+  let l:unset = s:IsVarUnset(l:ref.name)
+  if l:ref.has_default
+    let l:value = l:unset ? '' : expand('$' . l:ref.name)
+    return l:value ==# '' ? s:ExpandEnvVarsInText(l:ref.default) : l:value
+  endif
+  if l:unset
     let s:unset_var_count += 1
     if !s:suppress_warnings
       echohl WarningMsg
-      echom '⚠️ Environment variable $' . a:varname . ' is not defined'
+      echom '⚠️ Environment variable $' . l:ref.name . ' is not defined'
       echohl None
     endif
-    if a:prefix ==# "${"
-      return '${' . a:varname . '}'
-    else
-      return '$' . a:varname
-    endif
+    return a:full
   endif
-  return expand('$' . a:varname)
+  return expand('$' . l:ref.name)
 endfunction
 
 function! EnvxExpandUnderCursor()
@@ -60,35 +68,21 @@ function! EnvxExpandUnderCursor()
     return
   endif
 
-  let l:full = l:match[0]
   let l:start = l:match[1]
-  let l:end = l:start + len(l:full)
-  let l:varname = s:VarNameFromMatch(l:full)
-  let l:prefix = (l:full[1] ==# '{') ? "${" : "$"
-  let l:expanded = s:ExpandOrKeep(l:varname, l:prefix)
-
-  " Use strpart to avoid negative indexing issues (e.g., at start of line)
-  let l:before = strpart(l:line, 0, l:start)
-  let l:after = strpart(l:line, l:end)
-  let l:replacement = l:before . l:expanded . l:after
+  let l:end = l:start + len(l:match[0])
+  " strpart avoids negative-index surprises at the start of the line
+  let l:replacement = strpart(l:line, 0, l:start)
+        \ . s:ExpandRef(l:match[0]) . strpart(l:line, l:end)
   if l:replacement !=# l:line
     call setline('.', l:replacement)
   endif
 endfunction
 
 
-function! s:ExpandMatch(braced, bare)
-  if a:braced !=# ''
-    return s:ExpandOrKeep(a:braced, '${')
-  endif
-  return s:ExpandOrKeep(a:bare, '$')
-endfunction
-
 function! s:ExpandEnvVarsInText(text)
   " Single substitute() pass: a var's expanded VALUE is never rescanned for
   " further $VAR references, unlike two chained substitute() calls would.
-  return substitute(a:text, s:VAR_PATTERN_CAPTURE,
-        \ '\=s:ExpandMatch(submatch(1), submatch(2))', 'g')
+  return substitute(a:text, s:VAR_PATTERN, '\=s:ExpandRef(submatch(0))', 'g')
 endfunction
 
 
@@ -247,13 +241,16 @@ function! s:HighlightUnsetEnvVars()
         break
       endif
       let l:full = l:match[0]
-      let l:varname = s:VarNameFromMatch(l:full)
-      if !has_key(l:unset_cache, l:varname)
-        let l:unset_cache[l:varname] = s:IsVarUnset(l:varname)
-      endif
-      if l:unset_cache[l:varname]
-        let l:pattern = '\%' . l:lnum . 'l\%' . (l:match[1] + 1) . 'c' . escape(l:full, '\.*[]^$~/')
-        call add(w:envx_match_ids, matchadd('EnvxUnsetVar', l:pattern))
+      let l:ref = s:ParseRef(l:full)
+      " A ${NAME:-default} reference has a fallback, so it's never flagged.
+      if !l:ref.has_default
+        if !has_key(l:unset_cache, l:ref.name)
+          let l:unset_cache[l:ref.name] = s:IsVarUnset(l:ref.name)
+        endif
+        if l:unset_cache[l:ref.name]
+          let l:pattern = '\%' . l:lnum . 'l\%' . (l:match[1] + 1) . 'c\V' . escape(l:full, '\')
+          call add(w:envx_match_ids, matchadd('EnvxUnsetVar', l:pattern))
+        endif
       endif
       let l:idx = l:match[1] + len(l:full)
     endwhile
