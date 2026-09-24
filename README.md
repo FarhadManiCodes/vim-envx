@@ -33,6 +33,20 @@ Then run `:PlugInstall`.
 | Visual (`x`)  | `<leader>ev`     | Expand all environment variables in visual   |
 | Visual (`x`)  | `<leader>evv`    | Extract selected text as env variable        |
 
+## Commands
+
+| Command          | Action                                       |
+|-------------------|-----------------------------------------------|
+| `:EnvxExpandAll`  | Expand all environment variables in the buffer |
+
+## Unset variable highlighting
+
+`$VAR` and `${VAR}` references that aren't set in the environment are highlighted automatically (linked to `WarningMsg` by default). Override the `EnvxUnsetVar` highlight group to customize:
+
+```vim
+highlight EnvxUnsetVar guifg=red gui=underline
+```
+
 ## Example
 
 If you have:

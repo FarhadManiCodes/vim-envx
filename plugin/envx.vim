@@ -70,16 +70,15 @@ let l:expanded = <SID>ExpandOrKeep(l:varname, l:prefix)
 endfunction
 
 
+function! s:ExpandEnvVarsInText(text)
+  let l:text = substitute(a:text, '\${\(\w\+\)}', '\=s:ExpandOrKeep(submatch(1), "${")', 'g')
+  let l:text = substitute(l:text, '\$\(\w\+\)', '\=s:ExpandOrKeep(submatch(1), "$")', 'g')
+  return l:text
+endfunction
+
+
 function! ExpandAllEnvVarsInLine()
-  let l:line = getline('.')
-
-  " === Expand ${VAR} format ===
-  let l:line = substitute(l:line, '\${\(\w\+\)}', '\=s:ExpandOrKeep(submatch(1), "${")', 'g')
-
-  " === Expand $VAR format ===
-  let l:line = substitute(l:line, '\$\(\w\+\)', '\=s:ExpandOrKeep(submatch(1), "$")', 'g')
-
-  call setline('.', l:line)
+  call setline('.', s:ExpandEnvVarsInText(getline('.')))
 endfunction
 
 
@@ -88,18 +87,17 @@ function! ExpandEnvVarsInVisual()
   let l:end_line = line("'>")
 
   for lnum in range(l:start_line, l:end_line)
-    let l:line = getline(lnum)
-
-    " Expand ${VAR}
-    let l:line = substitute(l:line, '\${\(\w\+\)}',
-          \ '\=<SID>ExpandOrKeep(submatch(1), "${")', 'g')
-
-    " Expand $VAR
-    let l:line = substitute(l:line, '\$\(\w\+\)',
-          \ '\=<SID>ExpandOrKeep(submatch(1), "$")', 'g')
-
-    call setline(lnum, l:line)
+    call setline(lnum, s:ExpandEnvVarsInText(getline(lnum)))
   endfor
+endfunction
+
+
+function! ExpandAllEnvVarsInBuffer()
+  let l:save_cursor = getcurpos()
+  for lnum in range(1, line('$'))
+    call setline(lnum, s:ExpandEnvVarsInText(getline(lnum)))
+  endfor
+  call setpos('.', l:save_cursor)
 endfunction
 
 let g:env_stub_value = ""
@@ -154,3 +152,45 @@ autocmd InsertLeave * call <SID>InsertEnvAssignmentAbove()
 xnoremap <leader>ev :<C-u>call ExpandEnvVarsInVisual()<CR>
 nnoremap <leader>eev :call ExpandAllEnvVarsInLine()<CR>
 nnoremap <leader>ev :call ExpandEnvVarUnderCursor()<CR>
+
+command! EnvxExpandAll call ExpandAllEnvVarsInBuffer()
+
+" === Highlight $VAR / ${VAR} references that aren't set in the environment ===
+
+highlight default link EnvxUnsetVar WarningMsg
+
+function! s:IsVarUnset(varname)
+  return expand('$' . a:varname) ==# ('$' . a:varname)
+endfunction
+
+function! s:HighlightUnsetEnvVars()
+  if exists('w:envx_match_ids')
+    for l:id in w:envx_match_ids
+      silent! call matchdelete(l:id)
+    endfor
+  endif
+  let w:envx_match_ids = []
+
+  for lnum in range(1, line('$'))
+    let l:line = getline(lnum)
+    let l:idx = 0
+    while 1
+      let l:match = matchstrpos(l:line, '\${\w\+}\|\$\w\+', l:idx)
+      if l:match[1] == -1
+        break
+      endif
+      let l:full = l:match[0]
+      let l:varname = (l:full[1] ==# '{') ? l:full[2:-2] : l:full[1:]
+      if s:IsVarUnset(l:varname)
+        let l:pattern = '\%' . lnum . 'l\%' . (l:match[1] + 1) . 'c' . escape(l:full, '\.*[]^$~/')
+        call add(w:envx_match_ids, matchadd('EnvxUnsetVar', l:pattern))
+      endif
+      let l:idx = l:match[1] + len(l:full)
+    endwhile
+  endfor
+endfunction
+
+augroup EnvxHighlightUnset
+  autocmd!
+  autocmd BufEnter,TextChanged,InsertLeave * call s:HighlightUnsetEnvVars()
+augroup END
