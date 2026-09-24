@@ -16,7 +16,7 @@ function! s:ExpandOrKeep(varname, prefix)
       echom '⚠️ Environment variable $' . a:varname . ' is not defined'
       echohl None
     endif
-    if a:prefix == "${"
+    if a:prefix ==# "${"
       return '${' . a:varname . '}'
     else
       return '$' . a:varname
@@ -25,7 +25,7 @@ function! s:ExpandOrKeep(varname, prefix)
   return expand('$' . a:varname)
 endfunction
 
-function! ExpandEnvVarUnderCursor()
+function! EnvxExpandUnderCursor()
   let l:line = getline('.')
   let l:pos = col('.') - 1  " cursor index, 0-based
 
@@ -65,8 +65,8 @@ function! ExpandEnvVarUnderCursor()
   endif
 
   " === 3. Expand and validate ===
-let l:prefix = (l:full[1] == '{') ? "${" : "$"
-let l:expanded = <SID>ExpandOrKeep(l:varname, l:prefix)
+  let l:prefix = (l:full[1] ==# '{') ? "${" : "$"
+  let l:expanded = <SID>ExpandOrKeep(l:varname, l:prefix)
 
   " === 4. Replace text ===
   " Use strpart to avoid negative indexing issues (e.g., at start of line)
@@ -79,19 +79,27 @@ let l:expanded = <SID>ExpandOrKeep(l:varname, l:prefix)
 endfunction
 
 
+function! s:ExpandMatch(braced, bare)
+  if a:braced !=# ''
+    return s:ExpandOrKeep(a:braced, '${')
+  endif
+  return s:ExpandOrKeep(a:bare, '$')
+endfunction
+
 function! s:ExpandEnvVarsInText(text)
-  let l:text = substitute(a:text, '\${\(\w\+\)}', '\=s:ExpandOrKeep(submatch(1), "${")', 'g')
-  let l:text = substitute(l:text, '\$\(\w\+\)', '\=s:ExpandOrKeep(submatch(1), "$")', 'g')
-  return l:text
+  " Single substitute() pass: a var's expanded VALUE is never rescanned for
+  " further $VAR references, unlike two chained substitute() calls would.
+  return substitute(a:text, '\${\(\w\+\)}\|\$\(\w\+\)',
+        \ '\=s:ExpandMatch(submatch(1), submatch(2))', 'g')
 endfunction
 
 
-function! ExpandAllEnvVarsInLine()
+function! EnvxExpandLine()
   call setline('.', s:ExpandEnvVarsInText(getline('.')))
 endfunction
 
 
-function! ExpandEnvVarsInVisual()
+function! EnvxExpandVisual()
   let l:start_line = line("'<")
   let l:end_line = line("'>")
 
@@ -101,7 +109,7 @@ function! ExpandEnvVarsInVisual()
 endfunction
 
 
-function! ExpandAllEnvVarsInBuffer()
+function! EnvxExpandBuffer()
   let l:save_cursor = getcurpos()
   let s:suppress_warnings = 1
   let s:unset_var_count = 0
@@ -117,11 +125,15 @@ function! ExpandAllEnvVarsInBuffer()
   endif
 endfunction
 
-let g:env_stub_value = ""
-let g:env_stub_active = 0
+let s:env_stub_value = ""
+let s:env_stub_active = 0
 
 function! s:EnterInsertAfterMessage()
-  call feedkeys("i$", 'n')
+  " Guard against the 800ms timer firing after the user already left
+  " Normal mode on their own (would otherwise feed "i$" as literal text).
+  if mode() ==# 'n'
+    call feedkeys("i$", 'n')
+  endif
 endfunction
 
 function! s:ExtractToEnvStubAutoAssign()
@@ -134,8 +146,8 @@ function! s:ExtractToEnvStubAutoAssign()
 
   " Save selection to register z
   normal! gv"zy
-  let g:env_stub_value = @z
-  let g:env_stub_active = 1
+  let s:env_stub_value = @z
+  let s:env_stub_active = 1
 
   " Delete selected text
   normal! gvd
@@ -153,24 +165,35 @@ function! s:ExtractToEnvStubAutoAssign()
 endfunction
 
 function! s:InsertEnvAssignmentAbove()
-  if g:env_stub_active && g:env_stub_value != ""
-    let lnum = line('.')
-    let varname = expand('<cword>')
-    call append(lnum - 1, varname . '="' . g:env_stub_value . '"')
+  if s:env_stub_active && s:env_stub_value != ""
+    let l:lnum = line('.')
+    let l:varname = expand('<cword>')
+    if l:varname !~# '^\w\+$'
+      echohl WarningMsg
+      echom '⚠️ envx: no variable name entered; extraction cancelled (use u to undo)'
+      echohl None
+    else
+      let l:escaped_value = escape(s:env_stub_value, '\"')
+      call append(l:lnum - 1, l:varname . '="' . l:escaped_value . '"')
+    endif
 
-    let g:env_stub_value = ""
-    let g:env_stub_active = 0
+    let s:env_stub_value = ""
+    let s:env_stub_active = 0
   endif
 endfunction
 
 xnoremap <leader>evv :<C-u>call <SID>ExtractToEnvStubAutoAssign()<CR>
-autocmd InsertLeave * call <SID>InsertEnvAssignmentAbove()
 
-xnoremap <leader>ev :<C-u>call ExpandEnvVarsInVisual()<CR>
-nnoremap <leader>eev :call ExpandAllEnvVarsInLine()<CR>
-nnoremap <leader>ev :call ExpandEnvVarUnderCursor()<CR>
+augroup EnvxExtract
+  autocmd!
+  autocmd InsertLeave * call <SID>InsertEnvAssignmentAbove()
+augroup END
 
-command! EnvxExpandAll call ExpandAllEnvVarsInBuffer()
+xnoremap <leader>ev :<C-u>call EnvxExpandVisual()<CR>
+nnoremap <leader>eev :call EnvxExpandLine()<CR>
+nnoremap <leader>ev :call EnvxExpandUnderCursor()<CR>
+
+command! EnvxExpandAll call EnvxExpandBuffer()
 
 " === Highlight $VAR / ${VAR} references that aren't set in the environment ===
 
