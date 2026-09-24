@@ -4,8 +4,24 @@
 let s:suppress_warnings = 0
 let s:unset_var_count = 0
 
+" Non-capturing: for matchstrpos() scans that just need match boundaries.
+let s:VAR_PATTERN = '\${\w\+}\|\$\w\+'
+" Capturing: for substitute() replacements that need submatch(1)/submatch(2).
+let s:VAR_PATTERN_CAPTURE = '\${\(\w\+\)}\|\$\(\w\+\)'
+
 function! s:IsVarUnset(varname)
   return expand('$' . a:varname) ==# ('$' . a:varname)
+endfunction
+
+" Extract the bare NAME out of a "$NAME" or "${NAME}" match string.
+function! s:VarNameFromMatch(full)
+  return (a:full[1] ==# '{') ? a:full[2:-2] : a:full[1:]
+endfunction
+
+function! s:SetLineIfChanged(lnum, text)
+  if getline(a:lnum) !=# a:text
+    call setline(a:lnum, a:text)
+  endif
 endfunction
 
 function! s:ExpandOrKeep(varname, prefix)
@@ -29,46 +45,27 @@ function! EnvxExpandUnderCursor()
   let l:line = getline('.')
   let l:pos = col('.') - 1  " cursor index, 0-based
 
-  " === 1. Match ${VAR} ===
-  let l:match = matchstrpos(l:line, '\${\w\+}', 0)
-  while l:match != ['', -1, -1]
+  " Find the $VAR/${VAR} match (if any) that contains the cursor.
+  let l:match = matchstrpos(l:line, s:VAR_PATTERN, 0)
+  while l:match[1] != -1
         \ && !(l:pos >= l:match[1] && l:pos < l:match[1] + len(l:match[0]))
-    let l:next_start = l:match[1] + 1
-    let l:match = matchstrpos(l:line, '\${\w\+}', l:next_start)
+    let l:match = matchstrpos(l:line, s:VAR_PATTERN, l:match[1] + 1)
   endwhile
 
-  if l:match != ['', -1, -1]
-    let l:full = l:match[0]
-    let l:start = l:match[1]
-    let l:end = l:start + len(l:full)
-    let l:varname = l:full[2:-2]  " from ${VAR}
-  else
-    " === 2. Match $VAR ===
-    let l:match = matchstrpos(l:line, '\$\w\+', 0)
-    while l:match != ['', -1, -1]
-          \ && !(l:pos >= l:match[1] && l:pos < l:match[1] + len(l:match[0]))
-      let l:next_start = l:match[1] + 1
-      let l:match = matchstrpos(l:line, '\$\w\+', l:next_start)
-    endwhile
-
-    if l:match != ['', -1, -1]
-      let l:full = l:match[0]
-      let l:start = l:match[1]
-      let l:end = l:start + len(l:full)
-      let l:varname = l:full[1:]  " from $VAR
-    else
-      echohl WarningMsg
-      echom "No environment variable under cursor"
-      echohl None
-      return
-    endif
+  if l:match[1] == -1
+    echohl WarningMsg
+    echom "No environment variable under cursor"
+    echohl None
+    return
   endif
 
-  " === 3. Expand and validate ===
+  let l:full = l:match[0]
+  let l:start = l:match[1]
+  let l:end = l:start + len(l:full)
+  let l:varname = s:VarNameFromMatch(l:full)
   let l:prefix = (l:full[1] ==# '{') ? "${" : "$"
-  let l:expanded = <SID>ExpandOrKeep(l:varname, l:prefix)
+  let l:expanded = s:ExpandOrKeep(l:varname, l:prefix)
 
-  " === 4. Replace text ===
   " Use strpart to avoid negative indexing issues (e.g., at start of line)
   let l:before = strpart(l:line, 0, l:start)
   let l:after = strpart(l:line, l:end)
@@ -89,13 +86,13 @@ endfunction
 function! s:ExpandEnvVarsInText(text)
   " Single substitute() pass: a var's expanded VALUE is never rescanned for
   " further $VAR references, unlike two chained substitute() calls would.
-  return substitute(a:text, '\${\(\w\+\)}\|\$\(\w\+\)',
+  return substitute(a:text, s:VAR_PATTERN_CAPTURE,
         \ '\=s:ExpandMatch(submatch(1), submatch(2))', 'g')
 endfunction
 
 
 function! EnvxExpandLine()
-  call setline('.', s:ExpandEnvVarsInText(getline('.')))
+  call s:SetLineIfChanged('.', s:ExpandEnvVarsInText(getline('.')))
 endfunction
 
 
@@ -104,7 +101,7 @@ function! EnvxExpandVisual()
   let l:end_line = line("'>")
 
   for lnum in range(l:start_line, l:end_line)
-    call setline(lnum, s:ExpandEnvVarsInText(getline(lnum)))
+    call s:SetLineIfChanged(lnum, s:ExpandEnvVarsInText(getline(lnum)))
   endfor
 endfunction
 
@@ -113,9 +110,20 @@ function! EnvxExpandBuffer()
   let l:save_cursor = getcurpos()
   let s:suppress_warnings = 1
   let s:unset_var_count = 0
-  for lnum in range(1, line('$'))
-    call setline(lnum, s:ExpandEnvVarsInText(getline(lnum)))
+
+  let l:lines = getline(1, '$')
+  let l:changed = 0
+  for l:i in range(len(l:lines))
+    let l:new = s:ExpandEnvVarsInText(l:lines[l:i])
+    if l:new !=# l:lines[l:i]
+      let l:lines[l:i] = l:new
+      let l:changed = 1
+    endif
   endfor
+  if l:changed
+    call setline(1, l:lines)
+  endif
+
   let s:suppress_warnings = 0
   call setpos('.', l:save_cursor)
   if s:unset_var_count > 0
@@ -207,18 +215,26 @@ function! s:HighlightUnsetEnvVars()
   endif
   let w:envx_match_ids = []
 
-  for lnum in range(1, line('$'))
-    let l:line = getline(lnum)
+  " Memoize per scan: a var referenced many times in one buffer should only
+  " need one expand() lookup, not one per occurrence.
+  let l:unset_cache = {}
+  let l:lines = getline(1, '$')
+  for l:i in range(len(l:lines))
+    let l:lnum = l:i + 1
+    let l:line = l:lines[l:i]
     let l:idx = 0
     while 1
-      let l:match = matchstrpos(l:line, '\${\w\+}\|\$\w\+', l:idx)
+      let l:match = matchstrpos(l:line, s:VAR_PATTERN, l:idx)
       if l:match[1] == -1
         break
       endif
       let l:full = l:match[0]
-      let l:varname = (l:full[1] ==# '{') ? l:full[2:-2] : l:full[1:]
-      if s:IsVarUnset(l:varname)
-        let l:pattern = '\%' . lnum . 'l\%' . (l:match[1] + 1) . 'c' . escape(l:full, '\.*[]^$~/')
+      let l:varname = s:VarNameFromMatch(l:full)
+      if !has_key(l:unset_cache, l:varname)
+        let l:unset_cache[l:varname] = s:IsVarUnset(l:varname)
+      endif
+      if l:unset_cache[l:varname]
+        let l:pattern = '\%' . l:lnum . 'l\%' . (l:match[1] + 1) . 'c' . escape(l:full, '\.*[]^$~/')
         call add(w:envx_match_ids, matchadd('EnvxUnsetVar', l:pattern))
       endif
       let l:idx = l:match[1] + len(l:full)
