@@ -51,11 +51,25 @@ xmap <leader>xe <Plug>(EnvxExtract)
 
 ## Unset variable highlighting
 
-`$VAR` and `${VAR}` references that aren't set in the environment are highlighted automatically (linked to `WarningMsg` by default). Override the `EnvxUnsetVar` highlight group to customize:
+`$VAR` and `${VAR}` references that aren't set in the environment are highlighted (linked to `WarningMsg` by default), but only in filetypes where `$VAR` normally means an environment variable: `sh`, `bash`, `zsh`, `ksh`, `dockerfile`, `yaml`, `env`, `dotenv`. Override the `EnvxUnsetVar` highlight group to customize:
 
 ```vim
 highlight EnvxUnsetVar guifg=red gui=underline
 ```
+
+In shell filetypes, names the buffer assigns itself (`name=...`, `export name=...`, `for name in ...`, `read name`, `local name`) and `$1`, `$10`, `$_` are not flagged. `${NAME:-default}` is never flagged.
+
+| Setting | Default | Effect |
+|---------|---------|--------|
+| `g:envx_highlight_unset` | `1` | `0` turns highlighting off |
+| `g:envx_highlight_filetypes` | list above | filetypes to highlight in (replaces the default list) |
+| `g:envx_highlight_max_lines` | `2000` | buffers longer than this are not scanned |
+
+```vim
+let g:envx_highlight_filetypes = ['sh', 'zsh', 'yaml', 'toml', 'conf']
+```
+
+Other filetypes are left out on purpose because `$name` there often isn't an environment variable: `toml` (Starship's `$directory`), `dosini`/`conf` (foot's `${url}`, tmux's `$is_vim`, pacman's `$repo`), `json` (`$schema`, `$ref`) and `gitconfig` (git doesn't expand `$VAR`). Add them to the list if your files do use environment references.
 
 ## Example
 
