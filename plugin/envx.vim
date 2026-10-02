@@ -225,7 +225,69 @@ command! EnvxExpandAll call EnvxExpandBuffer()
 
 highlight default link EnvxUnsetVar WarningMsg
 
+" Filetypes where $VAR usually means "an environment variable". Elsewhere
+" (markdown math like $E = mc^2$, C++ macros, ...) the highlight would be
+" noise. Users can replace the list with g:envx_highlight_filetypes, or turn
+" the feature off with g:envx_highlight_unset = 0.
+let s:DEFAULT_HIGHLIGHT_FILETYPES = [
+      \ 'sh', 'bash', 'zsh', 'ksh', 'dockerfile', 'yaml', 'env', 'dotenv']
+
+" Shell scripts define their own variables, which the editor's environment
+" doesn't know about; for these filetypes such names are not flagged.
+let s:SHELL_FILETYPES = ['sh', 'bash', 'zsh', 'ksh']
+
+" Buffers longer than this are not scanned: every scan is whole-buffer.
+let s:DEFAULT_HIGHLIGHT_MAX_LINES = 2000
+
+function! s:FiletypeMatches(list)
+  for l:ft in split(&filetype, '\.')
+    if index(a:list, l:ft) >= 0
+      return 1
+    endif
+  endfor
+  return 0
+endfunction
+
+function! s:HighlightEnabled()
+  return get(g:, 'envx_highlight_unset', 1)
+        \ && s:FiletypeMatches(get(g:, 'envx_highlight_filetypes', s:DEFAULT_HIGHLIGHT_FILETYPES))
+        \ && line('$') <= get(g:, 'envx_highlight_max_lines', s:DEFAULT_HIGHLIGHT_MAX_LINES)
+endfunction
+
+" Names a shell buffer defines itself: `NAME=`, `NAME+=`, `NAME[i]=`,
+" `for NAME in`, and the operands of read/local/declare/typeset/readonly/
+" export (`local -a st`, `read -r line`). A heuristic, not a parser.
+" Submatch 1/2/3 = assigned name / for-loop name / operand list.
+let s:SHELL_DEFINE_PATTERN = '\%(^\|\n\|[[:space:];&|(]\)\%('
+      \ . '\(\h\w*\)\%(\[[^]\n]*\]\)\=+\==\%(=\)\@!'
+      \ . '\|for\s\+\(\h\w*\)\s\+in\>'
+      \ . '\|\%(read\|local\|declare\|typeset\|readonly\|export\)\s\+'
+      \ . '\%(-\S\+\s\+\)*\(\h\w*\%(\s\+\h\w*\)*\)\)'
+
+let s:shell_defined = {}
+
+function! s:RecordShellNames(...)
+  for l:names in a:000
+    for l:n in split(l:names)
+      let s:shell_defined[l:n] = 1
+    endfor
+  endfor
+  return ''
+endfunction
+
+" One substitute() over the whole text (lines joined with "\n"): the regex
+" scan runs in C and only the (few) definitions call back into Vimscript.
+" Matching per line instead measured about twice as slow.
+function! s:ShellDefinedNames(lines)
+  let s:shell_defined = {}
+  call substitute(join(a:lines, "\n"), s:SHELL_DEFINE_PATTERN,
+        \ '\=s:RecordShellNames(submatch(1), submatch(2), submatch(3))', 'g')
+  return s:shell_defined
+endfunction
+
 function! s:HighlightUnsetEnvVars()
+  " Always clear first: window-local matches outlive the buffer shown in
+  " the window, and the filetype/switch may have changed since the last scan.
   if exists('w:envx_match_ids')
     for l:id in w:envx_match_ids
       silent! call matchdelete(l:id)
@@ -233,13 +295,23 @@ function! s:HighlightUnsetEnvVars()
   endif
   let w:envx_match_ids = []
 
-  " Memoize per scan: a var referenced many times in one buffer should only
-  " need one expand() lookup, not one per occurrence.
-  let l:unset_cache = {}
+  if !s:HighlightEnabled()
+    return
+  endif
+
+  let l:is_shell = s:FiletypeMatches(s:SHELL_FILETYPES)
   let l:lines = getline(1, '$')
+  let l:assigned = v:null  " built lazily, only if a candidate shows up
+
+  " Memoize per scan: a var referenced many times in one buffer should only
+  " need one exists() lookup, not one per occurrence.
+  let l:unset_cache = {}
   for l:i in range(len(l:lines))
     let l:lnum = l:i + 1
     let l:line = l:lines[l:i]
+    if stridx(l:line, '$') < 0
+      continue
+    endif
     let l:idx = 0
     while 1
       let l:match = matchstrpos(l:line, s:VAR_PATTERN, l:idx)
@@ -248,24 +320,36 @@ function! s:HighlightUnsetEnvVars()
       endif
       let l:full = l:match[0]
       let l:ref = s:ParseRef(l:full)
+      let l:idx = l:match[1] + len(l:full)
       " A ${NAME:-default} reference has a fallback, so it's never flagged.
-      if !l:ref.has_default
-        if !has_key(l:unset_cache, l:ref.name)
-          let l:unset_cache[l:ref.name] = s:IsVarUnset(l:ref.name)
+      " Digit-only names ($1, $10) and $_ are positional/special parameters,
+      " never environment variables.
+      if l:ref.has_default || l:ref.name =~# '^\%(\d\+\|_\)$'
+        continue
+      endif
+      if !has_key(l:unset_cache, l:ref.name)
+        let l:unset_cache[l:ref.name] = s:IsVarUnset(l:ref.name)
+      endif
+      if !l:unset_cache[l:ref.name]
+        continue
+      endif
+      if l:is_shell
+        if l:assigned is v:null
+          let l:assigned = s:ShellDefinedNames(l:lines)
         endif
-        if l:unset_cache[l:ref.name]
-          let l:pattern = '\%' . l:lnum . 'l\%' . (l:match[1] + 1) . 'c\V' . escape(l:full, '\')
-          call add(w:envx_match_ids, matchadd('EnvxUnsetVar', l:pattern))
+        if has_key(l:assigned, l:ref.name)
+          continue
         endif
       endif
-      let l:idx = l:match[1] + len(l:full)
+      let l:pattern = '\%' . l:lnum . 'l\%' . (l:match[1] + 1) . 'c\V' . escape(l:full, '\')
+      call add(w:envx_match_ids, matchadd('EnvxUnsetVar', l:pattern))
     endwhile
   endfor
 endfunction
 
 augroup EnvxHighlightUnset
   autocmd!
-  autocmd BufEnter,TextChanged,InsertLeave * call s:HighlightUnsetEnvVars()
+  autocmd BufEnter,FileType,TextChanged,InsertLeave * call s:HighlightUnsetEnvVars()
 augroup END
 
 let &cpo = s:save_cpo
