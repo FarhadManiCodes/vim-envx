@@ -57,7 +57,7 @@ xmap <leader>xe <Plug>(EnvxExtract)
 highlight EnvxUnsetVar guifg=red gui=underline
 ```
 
-In shell filetypes, names the buffer assigns itself (`name=...`, `export name=...`, `for name in ...`, `read name`, `local name`) and `$1`, `$10`, `$_` are not flagged. `${NAME:-default}` is never flagged.
+In shell filetypes, names the buffer assigns itself (`name=...`, `export name=...`, `for name in ...`, `read -rp "prompt" name`, `local n=0 name`) and `$1`, `$10`, `$_` are not flagged. `$` inside single quotes (`sed -n '3,$p'`, multi-line `jq`/`awk` programs of up to 40 lines) is skipped too, since a shell doesn't expand it there; this does not apply to `yaml`/`dockerfile`. `${NAME:-default}` is never flagged.
 
 | Setting | Default | Effect |
 |---------|---------|--------|

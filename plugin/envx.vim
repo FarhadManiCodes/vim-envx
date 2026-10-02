@@ -256,22 +256,40 @@ endfunction
 
 " Names a shell buffer defines itself: `NAME=`, `NAME+=`, `NAME[i]=`,
 " `for NAME in`, and the operands of read/local/declare/typeset/readonly/
-" export (`local -a st`, `read -r line`). A heuristic, not a parser.
-" Submatch 1/2/3 = assigned name / for-loop name / operand list.
+" export (`local -a st`, `local n=0 ans`, `read -rp "prompt" ans`).
+" A heuristic, not a parser. Submatch 1/2/3 = assigned name / for-loop name /
+" rest of the line after the keyword.
 let s:SHELL_DEFINE_PATTERN = '\%(^\|\n\|[[:space:];&|(]\)\%('
       \ . '\(\h\w*\)\%(\[[^]\n]*\]\)\=+\==\%(=\)\@!'
       \ . '\|for\s\+\(\h\w*\)\s\+in\>'
-      \ . '\|\%(read\|local\|declare\|typeset\|readonly\|export\)\s\+'
-      \ . '\%(-\S\+\s\+\)*\(\h\w*\%(\s\+\h\w*\)*\)\)'
+      \ . '\|\%(read\|local\|declare\|typeset\|readonly\|export\)\s\+\([^\n]*\)\)'
+
+" Closed shell constructs, leftmost first: an escaped char, '...' or "...".
+let s:SHELL_CLOSED_QUOTES = '\\.\|''[^'']*''\|"\%(\\.\|[^"\\]\)*"'
 
 let s:shell_defined = {}
 
-function! s:RecordShellNames(...)
-  for l:names in a:000
-    for l:n in split(l:names)
-      let s:shell_defined[l:n] = 1
-    endfor
+" Operands of read/local/...: drop quoted strings (prompts, values), stop at
+" the first command separator, then every token that starts with a name
+" (`ans`, `changed=0`) is a definition; options (`-rp`) and `$x` are not.
+function! s:RecordShellOperands(operands)
+  let l:text = substitute(a:operands, s:SHELL_CLOSED_QUOTES, ' ', 'g')
+  let l:text = substitute(l:text, '[;|&#].*', '', '')
+  for l:tok in split(l:text)
+    let l:name = matchstr(l:tok, '^\h\w*')
+    if l:name !=# ''
+      let s:shell_defined[l:name] = 1
+    endif
   endfor
+endfunction
+
+function! s:RecordShellNames(assigned, forname, operands)
+  for l:n in [a:assigned, a:forname]
+    if l:n !=# ''
+      let s:shell_defined[l:n] = 1
+    endif
+  endfor
+  call s:RecordShellOperands(a:operands)
   return ''
 endfunction
 
@@ -283,6 +301,56 @@ function! s:ShellDefinedNames(lines)
   call substitute(join(a:lines, "\n"), s:SHELL_DEFINE_PATTERN,
         \ '\=s:RecordShellNames(submatch(1), submatch(2), submatch(3))', 'g')
   return s:shell_defined
+endfunction
+
+" Is byte index `col` of a shell line inside '...'? A shell never expands $VAR
+" there (sed -n '3,$p', awk and jq programs). Look at the text from `from` to
+" `col`: strip the closed constructs, then an unclosed ' that comes before any
+" unclosed " or a comment # means yes.
+function! s:InSingleQuotes(line, from, col)
+  let l:before = substitute(strpart(a:line, a:from, a:col - a:from), s:SHELL_CLOSED_QUOTES, '', 'g')
+  return matchstr(l:before, '\%(^\|\s\)#\|[''"]') ==# "'"
+endfunction
+
+" Single-quoted strings that run over several lines (jq/awk programs). Returns
+" a list indexed by line: the byte index where the carried-in string ends on
+" that line (len+1 for a line wholly inside it), or 0 for none. A string
+" that isn't closed within s:SQ_MAX_LINES lines is assumed to be a stray
+" apostrophe (heredoc text, ...) and ignored, so a mistake stays local.
+let s:SQ_MAX_LINES = 40
+
+function! s:SingleQuoteCarry(lines)
+  let l:n = len(a:lines)
+  let l:carry = repeat([0], l:n)
+  let l:i = 0
+  let l:from = 0
+  while l:i < l:n
+    let l:line = a:lines[l:i]
+    if (l:from == 0 && stridx(l:line, "'") < 0)
+          \ || !s:InSingleQuotes(l:line, l:from, len(l:line))
+      let l:i += 1
+      let l:from = 0
+      continue
+    endif
+    " Opens a ' that this line doesn't close: look for the closing line.
+    let l:j = l:i + 1
+    while l:j < l:n && l:j - l:i <= s:SQ_MAX_LINES && stridx(a:lines[l:j], "'") < 0
+      let l:j += 1
+    endwhile
+    if l:j >= l:n || l:j - l:i > s:SQ_MAX_LINES
+      let l:i += 1
+      let l:from = 0
+      continue
+    endif
+    for l:k in range(l:i + 1, l:j - 1)
+      let l:carry[l:k] = len(a:lines[l:k]) + 1
+    endfor
+    let l:close = stridx(a:lines[l:j], "'") + 1
+    let l:carry[l:j] = l:close
+    let l:i = l:j
+    let l:from = l:close
+  endwhile
+  return l:carry
 endfunction
 
 function! s:HighlightUnsetEnvVars()
@@ -302,6 +370,7 @@ function! s:HighlightUnsetEnvVars()
   let l:is_shell = s:FiletypeMatches(s:SHELL_FILETYPES)
   let l:lines = getline(1, '$')
   let l:assigned = v:null  " built lazily, only if a candidate shows up
+  let l:carry = v:null
 
   " Memoize per scan: a var referenced many times in one buffer should only
   " need one exists() lookup, not one per occurrence.
@@ -338,6 +407,13 @@ function! s:HighlightUnsetEnvVars()
           let l:assigned = s:ShellDefinedNames(l:lines)
         endif
         if has_key(l:assigned, l:ref.name)
+          continue
+        endif
+        if l:carry is v:null
+          let l:carry = s:SingleQuoteCarry(l:lines)
+        endif
+        if l:carry[l:i] > l:match[1]
+              \ || s:InSingleQuotes(l:line, l:carry[l:i], l:match[1])
           continue
         endif
       endif
